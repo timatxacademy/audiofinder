@@ -5,6 +5,7 @@ from __future__ import annotations
 import click
 
 from . import audio_io
+from .calibrate import run_local_calibration
 from .config import ChirpConfig, DetectorConfig, default_device_id
 from .coordinator import run_coordinator
 from .listener import run_listener
@@ -167,8 +168,8 @@ def send_cmd(
 @click.option("--latency-offset-ms", type=float, default=0.0, show_default=True,
               help="Fixed delay (ms) to subtract from every emission->detection delay before "
                    "converting to distance, to cancel out non-acoustic latency (audio buffering, "
-                   "network, etc). Calibrate by playing a chirp with sender and listener right "
-                   "next to each other and using the delay it reports there as this offset.")
+                   "device DSP, etc). See `audiofinder calibrate` to measure a real value for "
+                   "this instead of guessing.")
 def coordinator_cmd(
     host: str,
     port: int,
@@ -189,6 +190,65 @@ def coordinator_cmd(
         speed_of_sound_m_s=speed_of_sound,
         latency_offset_seconds=latency_offset_ms / 1000.0,
     )
+
+
+@main.command("calibrate")
+@click.option("--input-device", default=None, help="Input (mic) device index or name substring.")
+@click.option("--output-device", default=None, help="Output (speaker) device index or name substring.")
+@_chirp_options
+@click.option("--threshold", type=float, default=_DEFAULT_DETECTOR.threshold, show_default=True,
+              help="Normalized correlation score (0..1) required to accept a detection.")
+@click.option("--rounds", type=int, default=5, show_default=True,
+              help="Number of chirps to play and average the delay over.")
+@click.option("--interval", type=float, default=1.5, show_default=True,
+              help="Seconds to wait between rounds.")
+@click.option("--timeout", "detection_timeout", type=float, default=3.0, show_default=True,
+              help="Seconds to wait for a detection before counting a round as missed.")
+def calibrate_cmd(
+    input_device, output_device, sample_rate, f0, f1, duration, threshold, rounds, interval, detection_timeout,
+) -> None:
+    """Measure this machine's own speaker->mic delay, for --latency-offset-ms.
+
+    Plays the chirp out of a speaker and listens for it on a microphone --
+    by default this machine's own built-in ones, right next to each other,
+    which is a same-machine loopback test rather than a substitute for
+    calibrating with your actual deployed hardware. Still, a real measured
+    number beats a guess: run this a few times, note the median delay it
+    reports, and pass it to `audiofinder coordinator --latency-offset-ms`.
+    """
+    chirp_cfg = ChirpConfig(sample_rate=sample_rate, f0=f0, f1=f1, duration=duration)
+    detector_cfg = DetectorConfig(threshold=threshold)
+    summary = run_local_calibration(
+        input_device=_parse_device(input_device),
+        output_device=_parse_device(output_device),
+        chirp_cfg=chirp_cfg,
+        detector_cfg=detector_cfg,
+        rounds=rounds,
+        interval=interval,
+        detection_timeout=detection_timeout,
+    )
+    click.echo("")
+    if summary.rounds_detected == 0:
+        click.echo(
+            f"0/{summary.rounds_attempted} rounds detected -- couldn't calibrate.\n"
+            f"Most likely --threshold {threshold} is too strict for this mic/speaker pair "
+            "and placement -- try again with a lower value (e.g. --threshold 0.3), or "
+            "confirm --input-device/--output-device are the ones you expect "
+            "(`audiofinder devices` lists them).",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    click.echo(f"{summary.rounds_detected}/{summary.rounds_attempted} rounds detected")
+    click.echo(
+        f"delay: median={summary.median_ms:.2f} ms  min={summary.min_ms:.2f} ms  max={summary.max_ms:.2f} ms"
+    )
+    if summary.rounds_detected < summary.rounds_attempted:
+        click.echo(
+            "note: some rounds were missed -- that's normal over the air; the median "
+            "of the successful ones is still a reasonable estimate.",
+        )
+    click.echo(f"\nSuggested: audiofinder coordinator --latency-offset-ms {summary.median_ms:.1f}")
 
 
 if __name__ == "__main__":

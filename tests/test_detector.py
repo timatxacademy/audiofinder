@@ -1,7 +1,7 @@
 import numpy as np
 
 from audiofinder.config import ChirpConfig
-from audiofinder.detector import ChirpDetector
+from audiofinder.detector import ChirpDetector, StreamingChirpDetector
 from audiofinder.signal_gen import generate_chirp
 
 
@@ -80,3 +80,48 @@ def test_detection_beyond_debounce_window_is_reported():
     detections = detector.process_window(buffer, window_start_sample=0)
 
     assert len(detections) == 2
+
+
+def test_streaming_detector_finds_chirp_split_across_chunk_boundary():
+    cfg = ChirpConfig(sample_rate=8000, f0=200.0, f1=1000.0, duration=0.2, amplitude=0.7)
+    detector, template = _make_detector(cfg)
+    streaming = StreamingChirpDetector(detector, len(template))
+
+    padding = 1000
+    full = np.zeros(padding + len(template) + padding, dtype=np.float32)
+    full[padding : padding + len(template)] = template
+
+    # Feed it in small chunks, deliberately splitting the chirp itself
+    # across a chunk boundary -- the kind of thing overlap-save buffering
+    # has to handle since a live audio stream doesn't know where a chirp
+    # will fall relative to its block size.
+    chunk_size = 500
+    all_detections = []
+    for start in range(0, len(full), chunk_size):
+        chunk = full[start : start + chunk_size]
+        all_detections.extend(streaming.feed(chunk, start))
+
+    assert len(all_detections) == 1
+    assert abs(all_detections[0].sample_index - padding) <= 2
+
+
+def test_streaming_detector_does_not_duplicate_across_many_small_chunks():
+    cfg = ChirpConfig(sample_rate=8000, f0=200.0, f1=1000.0, duration=0.2, amplitude=0.7)
+    detector, template = _make_detector(cfg, debounce_seconds=1.0)
+    streaming = StreamingChirpDetector(detector, len(template))
+
+    padding = 500
+    full = np.zeros(padding + len(template) + padding, dtype=np.float32)
+    full[padding : padding + len(template)] = template
+
+    # Very small chunks mean `feed` gets called many times while the same
+    # chirp is still sitting in the overlap buffer; debounce (inherited from
+    # the underlying ChirpDetector) should still prevent it being reported
+    # more than once.
+    chunk_size = 64
+    all_detections = []
+    for start in range(0, len(full), chunk_size):
+        chunk = full[start : start + chunk_size]
+        all_detections.extend(streaming.feed(chunk, start))
+
+    assert len(all_detections) == 1

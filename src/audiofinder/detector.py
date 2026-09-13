@@ -89,3 +89,37 @@ class ChirpDetector:
             self._last_trigger_sample = global_sample
             detections.append(Detection(sample_index=global_sample, score=float(score[idx])))
         return detections
+
+
+class StreamingChirpDetector:
+    """Runs a `ChirpDetector` continuously over a live stream of audio
+    chunks that arrive in arbitrary block sizes (as from `StreamRecorder`).
+
+    Handles the overlap-save bookkeeping so a chirp that straddles a chunk
+    boundary is still seen whole by at least one internal call to
+    `process_window`: each call to `feed` appends the new chunk to a
+    buffer, runs detection, then trims the buffer back down to just the
+    tail (`template_len - 1` samples) needed for the next call.
+    """
+
+    def __init__(self, detector: ChirpDetector, template_len: int) -> None:
+        self._detector = detector
+        self._template_len = template_len
+        self._buffer = np.empty(0, dtype=np.float64)
+        self._buffer_start_sample = 0
+
+    def feed(self, samples: np.ndarray, start_sample: int) -> list[Detection]:
+        """Feed one chunk of audio (with its global start sample index) and
+        return any detections found in it."""
+        if self._buffer.size == 0:
+            self._buffer_start_sample = start_sample
+        self._buffer = np.concatenate([self._buffer, samples])
+
+        detections = self._detector.process_window(self._buffer, self._buffer_start_sample)
+
+        keep = min(self._template_len - 1, self._buffer.size)
+        if keep < self._buffer.size:
+            self._buffer_start_sample += self._buffer.size - keep
+        self._buffer = self._buffer[self._buffer.size - keep :] if keep else np.empty(0, dtype=np.float64)
+
+        return detections

@@ -193,14 +193,34 @@ timestamp delta isn't pure travel time — it also includes:
   (see [Requirements](#requirements) on NTP/PTP).
 
 Because the non-acoustic latency is roughly constant regardless of real
-distance, it can be calibrated out: run a sender and listener right next
-to each other (true distance ~0), note the delay the coordinator reports
-for that detection, and pass it as `--latency-offset-ms` when starting the
-coordinator for real use:
+distance, it can be calibrated out. `audiofinder calibrate` automates this:
+it plays the chirp out of a speaker and listens for it on a mic on the same
+machine a few times, and reports the median delay:
 
 ```bash
-audiofinder coordinator --latency-offset-ms 45.2
+$ audiofinder calibrate --input-device 3 --output-device 4
+round 1/5: delay=26.48 ms  score=0.51
+round 2/5: delay=26.32 ms  score=0.49
+...
+5/5 rounds detected
+delay: median=26.46 ms  min=26.32 ms  max=26.55 ms
+
+Suggested: audiofinder coordinator --latency-offset-ms 26.5
 ```
+
+(That example is real output from this project's own dev machine's
+built-in speaker/mic — note how tight the spread is, ~0.2ms across 5
+rounds, for what's actually a fairly complex analog+digital round trip.
+Fixed latency like this really is fixed, which is exactly what makes it
+worth calibrating out rather than living with.)
+
+This is a same-machine loopback test, not a substitute for calibrating
+with the actual sender/listener hardware you deploy — a laptop speaker
+paired with a different Mac's mic across a room will have its own,
+different fixed delay — but it's a fast way to get a real measured number
+instead of guessing, and often a reasonable proxy if the machines involved
+are similar hardware. Use `--rounds`, `--threshold`, etc. to match your
+real setup; see `audiofinder calibrate --help`.
 
 `--speed-of-sound` (default `343` m/s, dry air at ~20°C) is also available
 if you want to account for temperature (roughly +0.6 m/s per °C).
@@ -222,12 +242,13 @@ src/audiofinder/
   timesync.py       minimal SNTP client, for reporting clock-sync quality
   protocol.py       newline-delimited JSON message format
   node_client.py    TCP client used by listener/sender to reach the coordinator
-  coordinator.py    TCP server that collects and groups reports
+  coordinator.py    TCP server that collects and groups reports, incl. distance estimation
   web.py            web dashboard (Flask) served alongside the coordinator
   listener.py       "listen" role
   sender.py         "send" role
+  calibrate.py      "calibrate" role: measures --latency-offset-ms automatically
   cli.py            `audiofinder` command line entry point
-tests/              unit tests (signal/detector/protocol/timesync/coordinator/web), no hardware required
+tests/              unit tests (signal/detector/protocol/timesync/coordinator/web/calibrate), no hardware required
 ```
 
 ## Known limitations (v1)
@@ -235,10 +256,14 @@ tests/              unit tests (signal/detector/protocol/timesync/coordinator/we
 - **No position estimate**, only a per-listener distance estimate (see
   above) — turning several of those into an actual (x, y) fix is future
   work.
-- **Distance estimates need calibration** (`--latency-offset-ms`) to be
-  meaningful at all — see [Distance estimate](#distance-estimate). Without
-  it, non-acoustic latency can dominate the number entirely, especially at
-  short range.
+- **Distance estimates need calibration** (`audiofinder calibrate` ->
+  `--latency-offset-ms`) to be meaningful at all — see
+  [Distance estimate](#distance-estimate). Without it, non-acoustic latency
+  can dominate the number entirely, especially at short range.
+- **One latency offset for the whole coordinator**, not per sender/listener
+  pair. Fine if your hardware is fairly uniform; if some devices have very
+  different fixed latency than others, every pair's distance estimate is
+  calibrated against the same single number.
 - **Timestamp accuracy** depends on (a) OS-level NTP sync between machines,
   which is typically 1-10ms on a LAN, and (b) this app's own estimate of
   when a sample actually left the speaker / arrived at the mic, derived

@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
-
-import numpy as np
 
 from .audio_io import StreamRecorder
 from .config import ChirpConfig, DetectorConfig, default_device_id
-from .detector import ChirpDetector
+from .detector import ChirpDetector, StreamingChirpDetector
 from .node_client import CoordinatorClient
 from .protocol import ROLE_LISTENER
 from .protocol import detection as detection_msg
@@ -53,13 +50,13 @@ def run_listener(
 ) -> None:
     device_id = device_id or default_device_id()
     template = generate_chirp(chirp_cfg)
-    template_len = len(template)
     detector = ChirpDetector(
         template=template,
         sample_rate=chirp_cfg.sample_rate,
         threshold=detector_cfg.threshold,
         debounce_seconds=detector_cfg.debounce_seconds,
     )
+    streaming = StreamingChirpDetector(detector, len(template))
 
     client = None
     if coordinator is not None:
@@ -85,33 +82,16 @@ def run_listener(
         f"threshold={detector_cfg.threshold})... Ctrl-C to stop."
     )
 
-    # Overlap-save buffering: keep the tail of the previous window (at least
-    # template_len - 1 samples) so a chirp that straddles a chunk boundary
-    # is still seen whole by at least one call to process_window.
-    buffer = np.empty(0, dtype=np.float32)
-    buffer_start_sample = 0
-
     try:
         while True:
             chunk = recorder.get(timeout=5.0)
-            if buffer.size == 0:
-                buffer_start_sample = chunk.start_sample
-            buffer = np.concatenate([buffer, chunk.samples])
-
-            detections = detector.process_window(buffer, buffer_start_sample)
-            for det in detections:
+            for det in streaming.feed(chunk.samples, chunk.start_sample):
                 timestamp = recorder.sample_to_time(det.sample_index)
                 print(f"[{device_id}] DETECTED chirp  t={timestamp:.4f}  score={det.score:.2f}")
                 if client is not None:
                     if not client.connected:
                         client.connect()
                     client.send(detection_msg(device_id, timestamp, det.score))
-
-            # Trim buffer, keeping only the tail needed for overlap next time.
-            keep = min(template_len - 1, buffer.size)
-            if keep < buffer.size:
-                buffer_start_sample += buffer.size - keep
-            buffer = buffer[buffer.size - keep :] if keep else np.empty(0, dtype=np.float32)
     except KeyboardInterrupt:
         print(f"\n[{device_id}] stopping listener...")
     finally:
