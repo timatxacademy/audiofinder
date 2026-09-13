@@ -132,8 +132,11 @@ def listen_cmd(
 @click.option("--repeat", type=int, default=1, show_default=True, help="Number of times to play the chirp.")
 @click.option("--interval", type=float, default=2.0, show_default=True,
               help="Seconds to wait between repeats.")
+@click.option("--daemon", is_flag=True, default=False,
+              help="After the initial repeats, stay connected and play again whenever the "
+                   "coordinator (e.g. its web dashboard) sends a play command. Requires --coordinator.")
 def send_cmd(
-    device_id, output_device, coordinator, sample_rate, f0, f1, duration, repeat, interval,
+    device_id, output_device, coordinator, sample_rate, f0, f1, duration, repeat, interval, daemon,
 ) -> None:
     """Play the reference chirp so listener nodes can detect it."""
     chirp_cfg = ChirpConfig(sample_rate=sample_rate, f0=f0, f1=f1, duration=duration)
@@ -144,6 +147,7 @@ def send_cmd(
         chirp_cfg=chirp_cfg,
         repeat=repeat,
         interval=interval,
+        daemon=daemon,
     )
 
 
@@ -154,9 +158,20 @@ def send_cmd(
               help="Seconds within which detections are grouped as one chirp event.")
 @click.option("--log-file", default=None, type=click.Path(dir_okay=False),
               help="Append JSONL records of all events here.")
-def coordinator_cmd(host: str, port: int, group_window: float, log_file: str | None) -> None:
+@click.option("--web-port", type=int, default=8766, show_default=True,
+              help="Port for the web dashboard.")
+@click.option("--no-web", is_flag=True, default=False, help="Disable the web dashboard.")
+def coordinator_cmd(
+    host: str, port: int, group_window: float, log_file: str | None, web_port: int, no_web: bool
+) -> None:
     """Run the coordinator that collects reports from listener/sender nodes."""
-    run_coordinator(host=host, port=port, group_window_seconds=group_window, log_path=log_file)
+    run_coordinator(
+        host=host,
+        port=port,
+        group_window_seconds=group_window,
+        log_path=log_file,
+        web_port=None if no_web else web_port,
+    )
 
 
 if __name__ == "__main__":

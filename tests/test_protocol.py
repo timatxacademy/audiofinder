@@ -18,6 +18,9 @@ def test_message_builders():
     hb = protocol.heartbeat("mac-1", ntp_offset_ms=1.5)
     assert hb == {"type": "heartbeat", "device_id": "mac-1", "ntp_offset_ms": 1.5}
 
+    c = protocol.command(protocol.COMMAND_PLAY_NOW)
+    assert c == {"type": "command", "command": "play_now"}
+
 
 def test_send_and_read_multiple_messages_over_socketpair():
     a, b = socket.socketpair()

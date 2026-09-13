@@ -3,6 +3,11 @@
 Connecting to a coordinator is optional: if it's unreachable, listener and
 sender nodes keep working standalone (printing to their own console) rather
 than failing outright, and will retry the connection on the next message.
+
+The connection is bidirectional: nodes normally only *send* reports, but a
+node can also opt in to `start_command_listener` to receive commands the
+coordinator pushes down (e.g. "play your chirp now", triggered from the web
+dashboard).
 """
 
 from __future__ import annotations
@@ -10,9 +15,9 @@ from __future__ import annotations
 import socket
 import sys
 import threading
-from typing import Any
+from typing import Any, Callable
 
-from .protocol import hello, send_message
+from .protocol import MessageReader, hello, send_message
 
 
 class CoordinatorClient:
@@ -51,6 +56,32 @@ class CoordinatorClient:
             print(f"[warn] lost connection to coordinator: {exc}", file=sys.stderr)
             self.connected = False
             return False
+
+    def start_command_listener(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """Spawn a background thread that reads messages the coordinator
+        sends down to this node (e.g. `{"type": "command", ...}`) and calls
+        `callback` for each one. Call this again after every successful
+        `connect()`/reconnect -- it listens on whichever socket is current
+        at the moment it's called, not on future reconnects.
+        """
+        with self._lock:
+            sock = self._sock
+        if sock is None:
+            return
+
+        def _reader() -> None:
+            reader = MessageReader(sock)
+            try:
+                for msg in reader:
+                    callback(msg)
+            except OSError:
+                pass
+            finally:
+                with self._lock:
+                    if self._sock is sock:
+                        self.connected = False
+
+        threading.Thread(target=_reader, daemon=True).start()
 
     def close(self) -> None:
         with self._lock:

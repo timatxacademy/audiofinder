@@ -31,6 +31,9 @@ arrival-time data this version produces is exactly what that would need).
    coordinator`) over a plain TCP/JSON connection. The coordinator groups
    detections that happen close together in time into one "event" and
    prints/logs a table of who heard it and when, relative to the earliest.
+5. The coordinator also serves a small **web dashboard** showing connected
+   nodes and a live feed of detections/emissions, with a button to remotely
+   tell a given sender to play its chirp right now.
 
 ```
    sender (plays chirp) ---- audio through the air ---->  listener A (mic)
@@ -38,6 +41,8 @@ arrival-time data this version produces is exactly what that would need).
                                                       \--> listener C (mic)
 
    listener A, B, C  ----TCP/JSON detections---->  coordinator (collects, groups, logs)
+                                                        |
+                                          web dashboard (browser, http://<coordinator>:8766)
 ```
 
 ## Requirements
@@ -111,6 +116,40 @@ Listener nodes print each detection locally too, so you can run
 `audiofinder listen` standalone (no `--coordinator`) just to test that a
 given Mac can hear the chirp at all.
 
+## Web dashboard
+
+The coordinator serves a web dashboard alongside its TCP port (default
+`http://<coordinator-host>:8766`, right next to the TCP port 8765 nodes
+report to). Open it in a browser to see:
+
+- **Nodes**: every listener/sender that has ever connected, its role,
+  live connected/offline status, how long since it was last heard from,
+  and its most recently reported NTP offset.
+- **Live feed**: detections, emissions, and grouped event summaries, as
+  they happen (polls every 1.5s).
+- **Play now**: a button next to any currently-connected sender that's
+  running in `--daemon` mode (see below) — click it to make that Mac play
+  its chirp immediately, without walking over to it or opening a terminal
+  on it.
+
+To make a sender remotely triggerable from the dashboard, run it with
+`--daemon`:
+
+```bash
+audiofinder send --coordinator 192.168.1.50:8765 --daemon --repeat 0
+```
+
+(`--repeat 0` skips the immediate play on startup so it just sits waiting
+for the dashboard's "Play now" button; drop it to also play immediately.)
+
+Disable the dashboard with `audiofinder coordinator --no-web`, or move it
+to a different port with `--web-port`.
+
+**No authentication.** This is meant for a trusted LAN, not the open
+internet — it also runs Flask's built-in development server, which is
+fine for a handful of people polling a dashboard on your network but isn't
+a general-purpose production web server.
+
 **Important:** the chirp shape (`--sample-rate`, `--f0`, `--f1`,
 `--duration`) must match between the sender and every listener — a listener
 can only recognize a chirp it has the same template for. Stick to the
@@ -139,10 +178,11 @@ src/audiofinder/
   protocol.py       newline-delimited JSON message format
   node_client.py    TCP client used by listener/sender to reach the coordinator
   coordinator.py    TCP server that collects and groups reports
+  web.py            web dashboard (Flask) served alongside the coordinator
   listener.py       "listen" role
   sender.py         "send" role
   cli.py            `audiofinder` command line entry point
-tests/              unit tests (signal/detector/protocol/timesync), no hardware required
+tests/              unit tests (signal/detector/protocol/timesync/coordinator/web), no hardware required
 ```
 
 ## Known limitations (v1)
@@ -171,6 +211,9 @@ tests/              unit tests (signal/detector/protocol/timesync), no hardware 
   without relying on external daemons.
 - mDNS-based auto-discovery of the coordinator instead of hardcoding
   `HOST:PORT`.
+- Authentication on the web dashboard/API, and a production-grade WSGI
+  server, if this ever needs to run somewhere less trusted than a home/lab
+  LAN.
 
 ## Tests
 
@@ -179,4 +222,6 @@ pytest
 ```
 
 Tests cover chirp generation/detection (synthetic audio, no hardware
-needed), the JSON protocol framing, and the SNTP offset/delay math.
+needed), the JSON protocol framing (including coordinator→node commands),
+the SNTP offset/delay math, coordinator state/event-grouping logic, and the
+web dashboard's API endpoints (via Flask's test client).

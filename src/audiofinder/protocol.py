@@ -7,6 +7,10 @@ followed by "\\n", sent over a plain TCP socket. Message "type" values:
     heartbeat  - sent periodically: liveness + current NTP sync quality
     detection  - sent by a listener when it hears the chirp
     emission   - sent by a sender when it plays the chirp
+    command    - sent by the coordinator DOWN to a node (e.g. from the web
+                 dashboard) asking it to do something right now, such as
+                 play its chirp on demand. Only a sender node running with
+                 `--daemon` acts on these.
 
 All timestamps are unix epoch seconds (float), computed on the sending
 node's own clock -- see audio_io.py and timesync.py for how those are
@@ -23,9 +27,12 @@ TYPE_HELLO = "hello"
 TYPE_HEARTBEAT = "heartbeat"
 TYPE_DETECTION = "detection"
 TYPE_EMISSION = "emission"
+TYPE_COMMAND = "command"
 
 ROLE_LISTENER = "listener"
 ROLE_SENDER = "sender"
+
+COMMAND_PLAY_NOW = "play_now"
 
 
 def hello(device_id: str, role: str) -> dict[str, Any]:
@@ -47,6 +54,10 @@ def detection(device_id: str, timestamp: float, score: float) -> dict[str, Any]:
 
 def emission(device_id: str, timestamp: float) -> dict[str, Any]:
     return {"type": TYPE_EMISSION, "device_id": device_id, "timestamp": timestamp}
+
+
+def command(command: str) -> dict[str, Any]:
+    return {"type": TYPE_COMMAND, "command": command}
 
 
 def send_message(sock: socket.socket, message: dict[str, Any]) -> None:
