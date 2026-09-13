@@ -23,6 +23,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import sounddevice as sd
@@ -162,12 +163,25 @@ def play_signal(
     signal: np.ndarray,
     sample_rate: int,
     device: int | str | None = None,
+    on_start: Callable[[float], None] | None = None,
 ) -> float:
     """Play `signal` once (blocking) and return the estimated unix timestamp
-    at which the first sample actually reached the output device (DAC)."""
+    at which the first sample actually reached the output device (DAC).
+
+    If given, `on_start` is called with that same timestamp as soon as it's
+    known -- i.e. as playback actually begins, not after this function
+    returns. This function only returns once the whole signal has finished
+    playing *and* drained out through the DAC (so callers can safely play
+    something else next), which can be most of a second after playback
+    starts; a caller that wants to report "it's playing now" as promptly as
+    possible (e.g. so the timestamp reaches a coordinator before a fast
+    listener's detection of it does) should use `on_start` instead of
+    waiting for this function's return value.
+    """
     signal = np.asarray(signal, dtype=np.float32)
     n_total = len(signal)
     state: dict[str, float | int | None] = {"pos": 0, "start_time": None}
+    start_known = threading.Event()
 
     def callback(outdata, frames, time_info, status) -> None:  # noqa: ANN001
         pos = state["pos"]
@@ -181,10 +195,23 @@ def play_signal(
             now = time.time()
             future_offset = time_info.outputBufferDacTime - time_info.currentTime
             state["start_time"] = now + future_offset
+            # Only flag the event, which is safe/fast, from inside an audio
+            # callback -- never do real work (like a socket call) here.
+            start_known.set()
 
         state["pos"] = pos + frames
         if state["pos"] >= n_total:
             raise sd.CallbackStop()
+
+    notifier: threading.Thread | None = None
+    if on_start is not None:
+
+        def _notify() -> None:
+            if start_known.wait(timeout=5.0):
+                on_start(state["start_time"])  # type: ignore[arg-type]
+
+        notifier = threading.Thread(target=_notify, daemon=True)
+        notifier.start()
 
     stream = sd.OutputStream(
         samplerate=sample_rate,
@@ -199,6 +226,9 @@ def play_signal(
         # Give the last buffer time to actually drain out through the DAC.
         latency = stream.latency if isinstance(stream.latency, (int, float)) else 0.05
         time.sleep(latency + 0.05)
+
+    if notifier is not None:
+        notifier.join(timeout=1.0)
 
     start_time = state["start_time"]
     assert start_time is not None

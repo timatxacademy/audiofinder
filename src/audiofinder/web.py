@@ -238,9 +238,15 @@ function renderNodes(nodes, serverTime) {
   });
 }
 
+function fmtDistance(distanceM) {
+  return (distanceM === null || distanceM === undefined) ? null : `~${distanceM.toFixed(1)} m`;
+}
+
 function describeEvent(ev) {
   if (ev.type === 'detection') {
-    return {icon: '🎤', text: `<strong>${ev.device_id}</strong> heard the chirp (score ${ev.score.toFixed(2)})`};
+    const dist = fmtDistance(ev.distance_m);
+    const distPart = dist ? `, ${dist} from sender` : '';
+    return {icon: '🎤', text: `<strong>${ev.device_id}</strong> heard the chirp (score ${ev.score.toFixed(2)}${distPart})`};
   }
   if (ev.type === 'emission') {
     return {icon: '🔊', text: `<strong>${ev.device_id}</strong> played the chirp`};
@@ -250,19 +256,41 @@ function describeEvent(ev) {
     const earliest = Math.min(...ev.detections.map(d => d.timestamp));
     const latest = Math.max(...ev.detections.map(d => d.timestamp));
     const spreadMs = ((latest - earliest) * 1000).toFixed(1);
-    return {icon: '📊', text: `event: <strong>${n}</strong> listener(s) heard one chirp, spread ${spreadMs} ms`};
+    const distances = ev.detections
+      .map(d => [d.device_id, fmtDistance(d.distance_m)])
+      .filter(([, dist]) => dist)
+      .map(([id, dist]) => `${id} ${dist}`)
+      .join(', ');
+    let text = `event: <strong>${n}</strong> listener(s) heard one chirp, spread ${spreadMs} ms`;
+    if (distances) text += ` &mdash; ${distances}`;
+    return {icon: '📊', text};
   }
   return {icon: '•', text: ev.type};
+}
+
+// The meaningful time for an event is when it actually happened (its own
+// `timestamp`, estimated on the reporting node's NTP-synced clock), not
+// `logged_at` (when the coordinator's TCP handler happened to receive the
+// message). Those can disagree and even reorder: playing a chirp blocks for
+// the whole chirp duration before the sender reports it, so a listener can
+// report *hearing* it before the sender's own report reaches the
+// coordinator, even though the emission always happens first in reality.
+function eventTime(ev) {
+  if (ev.type === 'event_summary') {
+    return Math.min(...ev.detections.map(d => d.timestamp));
+  }
+  return ev.timestamp;
 }
 
 function renderEvents(events) {
   eventsEmpty.hidden = events.length > 0;
   eventsEl.innerHTML = '';
-  for (const ev of events.slice().reverse()) {
+  const sorted = events.slice().sort((a, b) => eventTime(b) - eventTime(a));
+  for (const ev of sorted) {
     const {icon, text} = describeEvent(ev);
     const row = document.createElement('div');
     row.className = 'event';
-    row.innerHTML = `<time>${fmtClock(ev.logged_at)}</time><span class="icon">${icon}</span><span>${text}</span>`;
+    row.innerHTML = `<time>${fmtClock(eventTime(ev))}</time><span class="icon">${icon}</span><span>${text}</span>`;
     eventsEl.appendChild(row);
   }
 }

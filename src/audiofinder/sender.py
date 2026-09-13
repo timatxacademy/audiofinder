@@ -45,12 +45,25 @@ def run_sender(
 
     def play_once(reason: str) -> None:
         with play_lock:
-            start_time = play_signal(signal, chirp_cfg.sample_rate, device=output_device)
-            print(f"[{device_id}] played chirp ({reason}) at t={start_time:.4f}")
-            if client is not None:
-                if not client.connected:
-                    client.connect()
-                client.send(emission_msg(device_id, start_time))
+            reported = threading.Event()
+
+            def report(start_time: float) -> None:
+                # Fired as soon as playback actually starts, not after
+                # play_signal() returns (which waits for the whole chirp to
+                # finish and drain) -- reporting this immediately matters
+                # because the coordinator can only match a detection to an
+                # emission it has already heard about, and a listener can
+                # otherwise report hearing the chirp before this sender's
+                # own report of playing it arrives.
+                print(f"[{device_id}] played chirp ({reason}) at t={start_time:.4f}")
+                if client is not None:
+                    if not client.connected:
+                        client.connect()
+                    client.send(emission_msg(device_id, start_time))
+                reported.set()
+
+            play_signal(signal, chirp_cfg.sample_rate, device=output_device, on_start=report)
+            reported.wait(timeout=1.0)
 
     def on_command(msg: dict[str, Any]) -> None:
         if msg.get("type") == TYPE_COMMAND and msg.get("command") == COMMAND_PLAY_NOW:

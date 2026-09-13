@@ -6,12 +6,15 @@ NTP-synchronized clock; a coordinator collects those timestamped reports so
 you can see which devices heard a given chirp and how their arrival times
 relate to each other.
 
-**v1 scope:** detection + timestamps only. Listener nodes report *when* they
-heard the chirp; the coordinator groups near-simultaneous detections into
-"events" and shows each listener's arrival time relative to the others. It
-does **not** yet compute a physical position from those times (that's a
-natural next step — see [Roadmap](#roadmap) — and the per-listener
-arrival-time data this version produces is exactly what that would need).
+**v1 scope:** detection + timestamps, plus a rough distance estimate derived
+from them. Listener nodes report *when* they heard the chirp; the
+coordinator groups near-simultaneous detections into "events" and shows
+each listener's arrival time relative to the others, and (given a matching
+emission report) an estimated sender<->listener distance from the travel
+time. It does **not** yet compute a full physical *position* from multiple
+listeners' distances (that's a natural next step — see
+[Roadmap](#roadmap) — and the per-listener arrival-time data this version
+produces is exactly what that would need).
 
 ## How it works
 
@@ -31,9 +34,12 @@ arrival-time data this version produces is exactly what that would need).
    coordinator`) over a plain TCP/JSON connection. The coordinator groups
    detections that happen close together in time into one "event" and
    prints/logs a table of who heard it and when, relative to the earliest.
+   It also matches each detection to the emission that most plausibly
+   caused it and estimates the distance sound traveled between them (see
+   [Distance estimate](#distance-estimate)).
 5. The coordinator also serves a small **web dashboard** showing connected
-   nodes and a live feed of detections/emissions, with a button to remotely
-   tell a given sender to play its chirp right now.
+   nodes and a live feed of detections/emissions/distance estimates, with a
+   button to remotely tell a given sender to play its chirp right now.
 
 ```
    sender (plays chirp) ---- audio through the air ---->  listener A (mic)
@@ -166,6 +172,45 @@ them identically everywhere.
   on one listener, to avoid one physical chirp being reported multiple
   times as its correlation peak decays.
 
+## Distance estimate
+
+Whenever a detection can be matched to the emission that plausibly caused
+it, the coordinator estimates the distance sound traveled between them:
+`distance = speed_of_sound * (detection_timestamp - emission_timestamp)`.
+It's printed alongside each detection and event summary, and shown in the
+web dashboard's live feed.
+
+**This is a rough estimate, not a calibrated measurement**, because that
+timestamp delta isn't pure travel time — it also includes:
+
+- Real acoustic travel time (what we actually want): ~2.9 ms per meter.
+- Non-acoustic latency: audio buffering/driver latency on both ends, and
+  any residual error in this app's own DAC/ADC-to-wall-clock estimate (see
+  `audio_io.py`). In testing on this project, this alone was **~20-100 ms**
+  — i.e. equivalent to 7-35 *meters* of falsely-implied distance — even
+  between a laptop's own built-in speaker and mic a few centimeters apart.
+- Clock offset between sender and listener, if they're different machines
+  (see [Requirements](#requirements) on NTP/PTP).
+
+Because the non-acoustic latency is roughly constant regardless of real
+distance, it can be calibrated out: run a sender and listener right next
+to each other (true distance ~0), note the delay the coordinator reports
+for that detection, and pass it as `--latency-offset-ms` when starting the
+coordinator for real use:
+
+```bash
+audiofinder coordinator --latency-offset-ms 45.2
+```
+
+`--speed-of-sound` (default `343` m/s, dry air at ~20°C) is also available
+if you want to account for temperature (roughly +0.6 m/s per °C).
+
+Even calibrated, treat the result as order-of-magnitude: it doesn't account
+for the sound taking a longer, reflected path than the direct line between
+sender and listener, and a single distance doesn't tell you a *direction* —
+for that you'd need multiple listeners at known positions and the TDOA
+localization step described in [Roadmap](#roadmap).
+
 ## Project layout
 
 ```
@@ -187,7 +232,13 @@ tests/              unit tests (signal/detector/protocol/timesync/coordinator/we
 
 ## Known limitations (v1)
 
-- **No position estimate.** Only detection + relative timestamps.
+- **No position estimate**, only a per-listener distance estimate (see
+  above) — turning several of those into an actual (x, y) fix is future
+  work.
+- **Distance estimates need calibration** (`--latency-offset-ms`) to be
+  meaningful at all — see [Distance estimate](#distance-estimate). Without
+  it, non-acoustic latency can dominate the number entirely, especially at
+  short range.
 - **Timestamp accuracy** depends on (a) OS-level NTP sync between machines,
   which is typically 1-10ms on a LAN, and (b) this app's own estimate of
   when a sample actually left the speaker / arrived at the mic, derived

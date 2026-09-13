@@ -161,8 +161,23 @@ def send_cmd(
 @click.option("--web-port", type=int, default=8766, show_default=True,
               help="Port for the web dashboard.")
 @click.option("--no-web", is_flag=True, default=False, help="Disable the web dashboard.")
+@click.option("--speed-of-sound", type=float, default=343.0, show_default=True,
+              help="Speed of sound in m/s, used to convert emission->detection delay into a "
+                   "distance estimate. Adjust for temperature (~+0.6 m/s per degC above 20degC).")
+@click.option("--latency-offset-ms", type=float, default=0.0, show_default=True,
+              help="Fixed delay (ms) to subtract from every emission->detection delay before "
+                   "converting to distance, to cancel out non-acoustic latency (audio buffering, "
+                   "network, etc). Calibrate by playing a chirp with sender and listener right "
+                   "next to each other and using the delay it reports there as this offset.")
 def coordinator_cmd(
-    host: str, port: int, group_window: float, log_file: str | None, web_port: int, no_web: bool
+    host: str,
+    port: int,
+    group_window: float,
+    log_file: str | None,
+    web_port: int,
+    no_web: bool,
+    speed_of_sound: float,
+    latency_offset_ms: float,
 ) -> None:
     """Run the coordinator that collects reports from listener/sender nodes."""
     run_coordinator(
@@ -171,6 +186,8 @@ def coordinator_cmd(
         group_window_seconds=group_window,
         log_path=log_file,
         web_port=None if no_web else web_port,
+        speed_of_sound_m_s=speed_of_sound,
+        latency_offset_seconds=latency_offset_ms / 1000.0,
     )
 
 
